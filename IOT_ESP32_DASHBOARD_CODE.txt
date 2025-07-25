@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 IoT Temperature Monitor</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <!-- Particles.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+    
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    
+    <!-- Google Fonts - Poppins -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK v9 Modular -->
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-app.js';
+        import { getDatabase, ref, onValue, query, orderByKey, limitToLast } from 'https://www.gstatic.com/firebasejs/9.23.0/firebase-database.js';
+
+        // TODO: Add your Firebase configuration
+        // Replace these values with your actual Firebase project configuration
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY_HERE",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            databaseURL: "https://esp32-iot-dashboard-2b939-default-rtdb.firebaseio.com/",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "YOUR_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const database = getDatabase(app);
+
+        // Global variables for chart and data management
+        let temperatureChart;
+        let temperatureGauge;
+        let temperatureData = [];
+        const MAX_DATA_POINTS = 20;
+        let isLoading = true;
+        let isDarkMode = false;
+
+        // Initialize the dashboard when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeParticles();
+            initializeChart();
+            initializeGauge();
+            setupFirebaseListeners();
+            initializeLucideIcons();
+            showLoadingSkeleton();
+            
+            // Add event listeners
+            const dismissButton = document.getElementById('dismissAlert');
+            if (dismissButton) {
+                dismissButton.addEventListener('click', dismissAlert);
+            }
+
+            const themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', toggleTheme);
+            }
+
+            // Initialize intersection observer for scroll animations
+            initializeScrollAnimations();
+            
+            // Start Firebase sync animation
+            startFirebaseSyncAnimation();
+        });
+
+        // Initialize Particles.js background with cool blue/purple theme
+        function initializeParticles() {
+            particlesJS('particles-js', {
+                particles: {
+                    number: {
+                        value: 60,
+                        density: {
+                            enable: true,
+                            value_area: 800
+                        }
+                    },
+                    color: {
+                        value: ["#3b82f6", "#8b5cf6", "#06b6d4", "#a855f7", "#6366f1"]
+                    },
+                    shape: {
+                        type: "circle",
+                        stroke: {
+                            width: 0,
+                            color: "#000000"
+                        }
+                    },
+                    opacity: {
+                        value: 0.2,
+                        random: true,
+                        anim: {
+                            enable: true,
+                            speed: 0.8,
+                            opacity_min: 0.05,
+                            sync: false
+                        }
+                    },
+                    size: {
+                        value: 2,
+                        random: true,
+                        anim: {
+                            enable: true,
+                            speed: 1.5,
+                            size_min: 0.1,
+                            sync: false
+                        }
+                    },
+                    line_linked: {
+                        enable: true,
+                        distance: 120,
+                        color: "#6366f1",
+                        opacity: 0.15,
+                        width: 1
+                    },
+                    move: {
+                        enable: true,
+                        speed: 0.8,
+                        direction: "none",
+                        random: false,
+                        straight: false,
+                        out_mode: "out",
+                        bounce: false,
+                        attract: {
+                            enable: false,
+                            rotateX: 600,
+                            rotateY: 1200
+                        }
+                    }
+                },
+                interactivity: {
+                    detect_on: "canvas",
+                    events: {
+                        onhover: {
+                            enable: true,
+                            mode: "bubble"
+                        },
+                        onclick: {
+                            enable: true,
+                            mode: "repulse"
+                        },
+                        resize: true
+                    },
+                    modes: {
+                        grab: {
+                            distance: 400,
+                            line_linked: {
+                                opacity: 1
+                            }
+                        },
+                        bubble: {
+                            distance: 200,
+                            size: 4,
+                            duration: 2,
+                            opacity: 0.4,
+                            speed: 3
+                        },
+                        repulse: {
+                            distance: 150,
+                            duration: 0.4
+                        },
+                        push: {
+                            particles_nb: 4
+                        },
+                        remove: {
+                            particles_nb: 2
+                        }
+                    }
+                },
+                retina_detect: true
+            });
+        }
+
+        // Initialize Chart.js with enhanced styling
+        function initializeChart() {
+            const ctx = document.getElementById('temperatureChart').getContext('2d');
+            
+            // Create gradient
+            const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+            gradient.addColorStop(0, 'rgba(99, 102, 241, 0.3)');
+            gradient.addColorStop(1, 'rgba(99, 102, 241, 0.0)');
+
+            temperatureChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Temperature (°C)',
+                        data: [],
+                        borderColor: '#6366f1',
+                        backgroundColor: gradient,
+                        borderWidth: 3,
+                        fill: true,
+                        tension: 0.4,
+                        pointBackgroundColor: '#6366f1',
+                        pointBorderColor: 'rgba(255, 255, 255, 0.9)',
+                        pointBorderWidth: 2,
+                        pointRadius: 5,
+                        pointHoverRadius: 7,
+                        pointHoverBackgroundColor: '#6366f1',
+                        pointHoverBorderColor: 'rgba(255, 255, 255, 1)',
+                        pointHoverBorderWidth: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#6366f1',
+                            borderWidth: 1,
+                            cornerRadius: 12,
+                            displayColors: false,
+                            titleFont: {
+                                family: 'Poppins',
+                                size: 12,
+                                weight: '500'
+                            },
+                            bodyFont: {
+                                family: 'Poppins',
+                                size: 11
+                            },
+                            callbacks: {
+                                title: function(context) {
+                                    return 'Time: ' + context[0].label;
+                                },
+                                label: function(context) {
+                                    return 'Temperature: ' + context.parsed.y.toFixed(1) + '°C';
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            grid: {
+                                color: 'rgba(148, 163, 184, 0.1)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: 'rgba(148, 163, 184, 0.8)',
+                                font: {
+                                    family: 'Poppins',
+                                    size: 11
+                                },
+                                callback: function(value) {
+                                    return value + '°C';
+                                }
+                            }
+                        },
+                        x: {
+                            grid: {
+                                color: 'rgba(148, 163, 184, 0.1)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: 'rgba(148, 163, 184, 0.8)',
+                                font: {
+                                    family: 'Poppins',
+                                    size: 11
+                                },
+                                maxTicksLimit: 6
+                            }
+                        }
+                    },
+                    animation: {
+                        duration: 1200,
+                        easing: 'easeInOutQuart'
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    }
+                }
+            });
+        }
+
+        // Initialize Temperature Gauge
+        function initializeGauge() {
+            const ctx = document.getElementById('temperatureGauge').getContext('2d');
+            
+            temperatureGauge = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    datasets: [{
+                        data: [0, 100],
+                        backgroundColor: [
+                            '#6366f1',
+                            'rgba(148, 163, 184, 0.1)'
+                        ],
+                        borderWidth: 0,
+                        cutout: '75%'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            enabled: false
+                        }
+                    },
+                    animation: {
+                        animateRotate: true,
+                        duration: 1500,
+                        easing: 'easeInOutQuart'
+                    }
+                }
+            });
+        }
+
+        // Setup Firebase real-time listeners
+        function setupFirebaseListeners() {
+            const temperatureRef = ref(database);
+            onValue(temperatureRef, (snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.val();
+                    // Check if 'temperature' field exists and is a number
+                    if (typeof data.temperature === 'number') {
+                        const currentTemperature = data.temperature;
+                        const alertMessage = data.alert; // Get alert message if available
+
+                        const now = new Date();
+                        const currentTimestamp = now.getTime();
+
+                        const latestReading = {
+                            timestamp: currentTimestamp.toString(),
+                            temperature: currentTemperature,
+                            time: now.toLocaleTimeString('en-PK', {
+                                timeZone: 'Asia/Karachi',
+                                hour12: true,
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                second: '2-digit'
+                            }),
+                            fullDate: now.toLocaleDateString('en-PK', {
+                                timeZone: 'Asia/Karachi',
+                                year: 'numeric',
+                                month: 'short',
+                                day: 'numeric'
+                            })
+                        };
+
+                        // Add to temperatureData for chart and logs, maintaining MAX_DATA_POINTS
+                        temperatureData.push(latestReading);
+                        if (temperatureData.length > MAX_DATA_POINTS) {
+                            temperatureData.shift(); // Remove oldest data point
+                        }
+
+                        updateCurrentTemperature(currentTemperature);
+                        updateConnectionStatus(true);
+                        updateGauge(currentTemperature);
+                        updateTemperatureList(temperatureData.slice().reverse()); // Reverse for latest at top
+                        updateChart(temperatureData);
+
+                        // Handle alert message from Firebase
+                        if (alertMessage) {
+                            showTemperatureAlert(alertMessage);
+                        } else {
+                            hideTemperatureAlert();
+                        }
+                        console.log("Data received and processed:", latestReading);
+                    } else {
+                        console.log("Temperature data not found or invalid in root.", data);
+                        updateConnectionStatus(false);
+                        updateFirebaseSyncStatus(false);
+                    }
+                    hideLoadingSkeleton();
+                } else {
+                    console.log("No data available at root.");
+                    updateConnectionStatus(false);
+                    hideLoadingSkeleton();
+                    updateFirebaseSyncStatus(false);
+                }
+            }, (error) => {
+                console.error("Firebase connection error:", error);
+                updateConnectionStatus(false);
+                hideLoadingSkeleton();
+                updateFirebaseSyncStatus(false);
+            });
+        }
+
+        // The processTemperatureData function is no longer needed as its logic is moved to setupFirebaseListeners
+        // function processTemperatureData(temperature, alertMessage) { ... }
+
+        // Update current temperature display with enhanced animations
+        function updateCurrentTemperature(temperature) {
+            const currentTempElement = document.getElementById('currentTemperature');
+            const tempStatusElement = document.getElementById('temperatureStatus');
+            const tempCard = document.getElementById('temperatureCard');
+            
+            // Animate temperature change
+            animateValue(currentTempElement, parseFloat(currentTempElement.textContent) || 0, temperature, 1000);
+            
+            // Update status based on temperature range (19°C threshold)
+            let status = 'Normal';
+            let statusColor = 'text-emerald-400';
+            let cardGlow = 'shadow-emerald-500/20';
+            
+            if (temperature > 18.0) {
+                status = 'Alert';
+                statusColor = 'text-orange-400';
+                cardGlow = 'shadow-orange-500/30';
+                showTemperatureAlert("Temperature increased beyond threshold i.e 18.0°C. Monitor conditions closely.");
+            } else {
+                status = 'Normal';
+                statusColor = 'text-emerald-400';
+                cardGlow = 'shadow-emerald-500/20';
+                hideTemperatureAlert();
+            }
+            
+            tempStatusElement.textContent = status;
+            tempStatusElement.className = `text-sm font-medium ${statusColor}`;
+            
+            // Update card glow effect
+            if (tempCard) {
+                tempCard.className = tempCard.className.replace(/shadow-\w+-\d+\/\d+/g, '') + ' ' + cardGlow;
+            }
+        }
+
+        // Update temperature gauge
+        function updateGauge(temperature) {
+            const maxTemp = 50; // Maximum temperature for gauge
+            const percentage = Math.min((temperature / maxTemp) * 100, 100);
+            
+            temperatureGauge.data.datasets[0].data = [percentage, 100 - percentage];
+            
+            // Change color based on temperature
+            if (temperature > 19.0) {
+                temperatureGauge.data.datasets[0].backgroundColor[0] = '#f97316'; // Orange
+            } else if (temperature < 15) {
+                temperatureGauge.data.datasets[0].backgroundColor[0] = '#06b6d4'; // Cyan
+            } else {
+                temperatureGauge.data.datasets[0].backgroundColor[0] = '#10b981'; // Emerald
+            }
+            
+            temperatureGauge.update('active');
+        }
+
+        // Animate number changes
+        function animateValue(element, start, end, duration) {
+            const startTime = performance.now();
+            const change = end - start;
+            
+            function updateValue(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+                const easeProgress = 1 - Math.pow(1 - progress, 3);
+                const current = start + (change * easeProgress);
+                
+                element.textContent = current.toFixed(1);
+                
+                if (progress < 1) {
+                    requestAnimationFrame(updateValue);
+                }
+            }
+            
+            requestAnimationFrame(updateValue);
+        }
+
+        // Show temperature alert
+        function showTemperatureAlert(message) {
+            const alertElement = document.getElementById("temperatureAlert");
+            const alertMessageElement = alertElement.querySelector("p span");
+            if (alertElement) {
+                alertMessageElement.textContent = message;
+                alertElement.classList.remove("hidden");
+                alertElement.classList.add("animate-slide-down");
+            }
+        }
+
+        // Hide temperature alert
+        function hideTemperatureAlert() {
+            const alertElement = document.getElementById('temperatureAlert');
+            if (alertElement && !alertElement.classList.contains('hidden')) {
+                alertElement.classList.add('hidden');
+                alertElement.classList.remove('animate-slide-down');
+            }
+        }
+
+        // Dismiss alert manually
+        function dismissAlert() {
+            hideTemperatureAlert();
+        }
+
+        // Update temperature logs list with enhanced styling
+        function updateTemperatureList(readings) {
+            const listElement = document.getElementById('temperatureList');
+            listElement.innerHTML = '';
+            
+            readings.forEach((reading, index) => {
+                const listItem = document.createElement('div');
+                listItem.className = 'glass-card p-4 hover:bg-white/10 transition-all duration-300 transform hover:scale-[1.02] animate-fade-in-up';
+                listItem.style.animationDelay = `${index * 100}ms`;
+                
+                const tempColor = reading.temperature > 19.0 ? 'text-orange-400' : 
+                                 reading.temperature < 15 ? 'text-cyan-400' : 'text-emerald-400';
+                
+                listItem.innerHTML = `
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-3 h-3 bg-gradient-to-r from-indigo-400 to-purple-500 rounded-full animate-pulse"></div>
+                            <div>
+                                <span class="font-bold ${tempColor} text-lg">${reading.temperature.toFixed(1)}°C</span>
+                                <div class="text-xs text-slate-400">${reading.fullDate}</div>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-sm text-indigo-300 font-medium">${reading.time}</div>
+                            <div class="text-xs text-slate-500">PKT</div>
+                        </div>
+                    </div>
+                `;
+                
+                listElement.appendChild(listItem);
+            });
+        }
+
+        // Update chart with new data
+        function updateChart(readings) {
+            const labels = readings.map(reading => reading.time);
+            const temperatures = readings.map(reading => reading.temperature);
+            
+            temperatureChart.data.labels = labels;
+            temperatureChart.data.datasets[0].data = temperatures;
+            temperatureChart.update('active');
+        }
+
+        // Update connection status indicator
+        function updateConnectionStatus(connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            const statusText = document.getElementById('connectionText');
+            
+            if (connected) {
+                statusElement.className = 'w-3 h-3 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50';
+                statusText.textContent = 'Connected';
+                statusText.className = 'text-sm text-emerald-400 font-medium';
+            } else {
+                statusElement.className = 'w-3 h-3 bg-red-400 rounded-full shadow-lg shadow-red-400/50';
+                statusText.textContent = 'Disconnected';
+                statusText.className = 'text-sm text-red-400 font-medium';
+            }
+        }
+
+        // Firebase sync animation
+        function startFirebaseSyncAnimation() {
+            const syncIcon = document.getElementById('firebaseSyncIcon');
+            if (syncIcon) {
+                setInterval(() => {
+                    syncIcon.classList.add('animate-spin');
+                    setTimeout(() => {
+                        syncIcon.classList.remove('animate-spin');
+                    }, 1000);
+                }, 5000);
+            }
+        }
+
+        // Update Firebase sync status
+        function updateFirebaseSyncStatus(syncing) {
+            const syncElement = document.getElementById('firebaseSyncStatus');
+            const syncText = document.getElementById('firebaseSyncText');
+            
+            if (syncing) {
+                syncElement.className = 'w-3 h-3 bg-blue-400 rounded-full animate-pulse shadow-lg shadow-blue-400/50';
+                syncText.textContent = 'Syncing';
+                syncText.className = 'text-sm text-blue-400 font-medium';
+            } else {
+                syncElement.className = 'w-3 h-3 bg-gray-400 rounded-full';
+                syncText.textContent = 'Offline';
+                syncText.className = 'text-sm text-gray-400 font-medium';
+            }
+        }
+
+        // Show loading skeleton
+        function showLoadingSkeleton() {
+            const skeletonElements = document.querySelectorAll('.loading-skeleton');
+            skeletonElements.forEach(el => el.classList.remove('hidden'));
+            
+            const contentElements = document.querySelectorAll('.main-content');
+            contentElements.forEach(el => el.classList.add('hidden'));
+        }
+
+        // Hide loading skeleton
+        function hideLoadingSkeleton() {
+            if (isLoading) {
+                isLoading = false;
+                setTimeout(() => {
+                    const skeletonElements = document.querySelectorAll('.loading-skeleton');
+                    skeletonElements.forEach(el => el.classList.add('hidden'));
+                    
+                    const contentElements = document.querySelectorAll('.main-content');
+                    contentElements.forEach(el => {
+                        el.classList.remove('hidden');
+                        el.classList.add('animate-fade-in');
+                    });
+                }, 1500);
+            }
+        }
+
+        // Initialize Lucide icons
+        function initializeLucideIcons() {
+            if (typeof lucide !== 'undefined') {
+                lucide.createIcons();
+            }
+        }
+
+        // Toggle theme (light/dark mode)
+        function toggleTheme() {
+            const body = document.body;
+            isDarkMode = !isDarkMode;
+            
+            if (isDarkMode) {
+                body.classList.add('dark-theme');
+                body.classList.remove('light-theme');
+            } else {
+                body.classList.remove('dark-theme');
+                body.classList.add('light-theme');
+            }
+        }
+
+        // Initialize scroll animations
+        function initializeScrollAnimations() {
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        entry.target.classList.add('animate-fade-in-up');
+                    }
+                });
+            }, {
+                threshold: 0.1,
+                rootMargin: '0px 0px -50px 0px'
+            });
+
+            const animatedElements = document.querySelectorAll('.scroll-animate');
+            animatedElements.forEach(el => observer.observe(el));
+        }
+
+        // Make functions available globally for debugging
+        window.temperatureChart = temperatureChart;
+        window.setupFirebaseListeners = setupFirebaseListeners;
+    </script>
+    
+    <style>
+        /* Custom Glassmorphism Styles with Cool Blue/Purple Theme */
+        * {
+            font-family: 'Poppins', sans-serif;
+        }
+
+        .glass-card {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 24px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .glass-header {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(35px);
+            -webkit-backdrop-filter: blur(35px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .glass-alert {
+            background: rgba(249, 115, 22, 0.12);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid rgba(249, 115, 22, 0.25);
+            border-left: 4px solid rgba(249, 115, 22, 0.8);
+        }
+
+        .floating-widget {
+            transform: translateY(0);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .floating-widget:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 20px 60px rgba(99, 102, 241, 0.25);
+        }
+
+        /* Enhanced Animations */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(40px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes pulse-glow {
+            0%, 100% {
+                box-shadow: 0 0 25px rgba(99, 102, 241, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 50px rgba(99, 102, 241, 0.7);
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: -200px 0;
+            }
+            100% {
+                background-position: calc(200px + 100%) 0;
+            }
+        }
+
+        @keyframes float {
+            0%, 100% {
+                transform: translateY(0px);
+            }
+            50% {
+                transform: translateY(-10px);
+            }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.8s ease-out forwards;
+        }
+
+        .animate-fade-in {
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+
+        .animate-slide-down {
+            animation: slideDown 0.5s ease-out forwards;
+        }
+
+        .animate-pulse-glow {
+            animation: pulse-glow 3s ease-in-out infinite;
+        }
+
+        .animate-float {
+            animation: float 6s ease-in-out infinite;
+        }
+
+        .loading-skeleton {
+            background: linear-gradient(90deg, rgba(255,255,255,0.08) 25%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.08) 75%);
+            background-size: 200px 100%;
+            animation: shimmer 2s infinite;
+        }
+
+        /* Gradient Backgrounds - Cool Blues and Purples */
+        .gradient-bg {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 25%, #334155 50%, #475569 75%, #64748b 100%);
+            background-size: 400% 400%;
+            animation: gradientShift 15s ease infinite;
+            min-height: 100vh;
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .light-theme {
+            background: linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 25%, #f8fafc 50%, #f1f5f9 75%, #e2e8f0 100%);
+        }
+
+        .dark-theme {
+            background: linear-gradient(135deg, #0c0a1e 0%, #1a1b3a 25%, #2d1b69 50%, #3730a3 75%, #4338ca 100%);
+        }
+
+        /* Custom scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(99, 102, 241, 0.4);
+            border-radius: 4px;
+        }
+        
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: rgba(99, 102, 241, 0.6);
+        }
+
+        /* Particles container */
+        #particles-js {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            z-index: -1;
+        }
+
+        /* 3D Soft Shadows */
+        .soft-shadow {
+            box-shadow: 
+                0 2px 8px rgba(0, 0, 0, 0.1),
+                0 8px 24px rgba(0, 0, 0, 0.08),
+                0 16px 48px rgba(0, 0, 0, 0.06);
+        }
+
+        .soft-shadow-lg {
+            box-shadow: 
+                0 4px 16px rgba(0, 0, 0, 0.12),
+                0 12px 32px rgba(0, 0, 0, 0.1),
+                0 24px 64px rgba(0, 0, 0, 0.08);
+        }
+
+        /* Mobile responsiveness */
+        @media (max-width: 768px) {
+            .glass-card {
+                border-radius: 20px;
+                margin: 0.5rem;
+            }
+            
+            .floating-widget:hover {
+                transform: translateY(-4px);
+            }
+        }
+    </style>
+</head>
+<body class="gradient-bg overflow-x-hidden">
+    <!-- Animated Background -->
+    <div id="particles-js"></div>
+
+    <!-- Header -->
+    <header class="glass-header sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-4">
+                    <div class="w-14 h-14 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center shadow-lg animate-pulse-glow animate-float">
+                        <i data-lucide="thermometer" class="w-7 h-7 text-white"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-bold text-white">IoT Temperature Monitor</h1>
+                        <p class="text-sm text-slate-300">ESP32 • Real-time monitoring</p>
+                    </div>
+                </div>
+                
+                <!-- Controls -->
+                <div class="flex items-center space-x-4">
+                    <!-- Firebase Sync Indicator -->
+                    <div class="flex items-center space-x-2 glass-card px-4 py-2">
+                        <i id="firebaseSyncIcon" data-lucide="cloud" class="w-4 h-4 text-blue-400"></i>
+                        <div id="firebaseSyncStatus" class="w-3 h-3 bg-blue-400 rounded-full animate-pulse"></div>
+                        <span id="firebaseSyncText" class="text-sm text-blue-400 font-medium">Syncing</span>
+                    </div>
+                    
+                    <!-- Theme Toggle -->
+                    <button id="themeToggle" class="glass-card p-3 hover:bg-white/15 transition-all duration-300 floating-widget">
+                        <i data-lucide="moon" class="w-5 h-5 text-white"></i>
+                    </button>
+                    
+                    <!-- Connection Status -->
+                    <div class="flex items-center space-x-2 glass-card px-4 py-2">
+                        <div id="connectionStatus" class="w-3 h-3 bg-gray-400 rounded-full"></div>
+                        <span id="connectionText" class="text-sm text-slate-300 font-medium">Connecting...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Temperature Alert Banner (19°C threshold) -->
+    <div id="temperatureAlert" class="hidden glass-alert mx-4 sm:mx-6 lg:mx-8 mt-4 rounded-2xl p-4 shadow-2xl">
+        <div class="flex items-center">
+            <div class="flex-shrink-0">
+                <i data-lucide="alert-triangle" class="w-6 h-6 text-orange-400 animate-pulse"></i>
+            </div>
+            <div class="ml-3 flex-1">
+                <p class="text-sm text-orange-100 font-medium">
+                    <span class="font-bold">Temperature Alert:</span> Ambient temperature has exceeded 19.0°C threshold. Monitor conditions closely.
+                </p>
+            </div>
+            <button id="dismissAlert" class="ml-4 p-2 rounded-lg hover:bg-orange-500/20 transition-colors duration-200">
+                <i data-lucide="x" class="w-4 h-4 text-orange-400"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Loading Skeletons -->
+        <div class="loading-skeleton grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+            <div class="lg:col-span-1">
+                <div class="glass-card p-8 h-80 loading-skeleton rounded-2xl"></div>
+            </div>
+            <div class="lg:col-span-1">
+                <div class="glass-card p-8 h-80 loading-skeleton rounded-2xl"></div>
+            </div>
+            <div class="lg:col-span-2">
+                <div class="glass-card p-6 h-80 loading-skeleton rounded-2xl"></div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard Content -->
+        <div class="main-content hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
+                
+                <!-- Current Temperature Card -->
+                <div class="lg:col-span-1 scroll-animate">
+                    <div id="temperatureCard" class="glass-card p-8 floating-widget soft-shadow-lg shadow-emerald-500/20 transition-all duration-500">
+                        <div class="text-center">
+                            <div class="flex items-center justify-center mb-4">
+                                <i data-lucide="thermometer" class="w-6 h-6 text-indigo-400 mr-2"></i>
+                                <h2 class="text-lg font-bold text-white">Live Temperature</h2>
+                            </div>
+                            
+                            <div class="relative mb-6">
+                                <div class="text-5xl font-bold text-white mb-2 font-mono">
+                                    <span id="currentTemperature">--.-</span><span class="text-2xl text-indigo-300">°C</span>
+                                </div>
+                                <div id="temperatureStatus" class="text-sm font-medium text-slate-400">Waiting for data...</div>
+                            </div>
+                            
+                            <!-- Temperature Gauge -->
+                            <div class="relative w-24 h-24 mx-auto mb-4">
+                                <canvas id="temperatureGauge"></canvas>
+                                <div class="absolute inset-0 flex items-center justify-center">
+                                    <i data-lucide="activity" class="w-6 h-6 text-indigo-400 animate-pulse"></i>
+                                </div>
+                            </div>
+                            
+                            <!-- Stats -->
+                            <div class="grid grid-cols-1 gap-3 text-center">
+                                <div class="glass-card p-3 rounded-xl">
+                                    <div class="text-xs text-slate-400">Last Updated</div>
+                                    <div id="lastUpdated" class="text-sm text-white font-medium">Never</div>
+                                </div>
+                                <div class="glass-card p-3 rounded-xl">
+                                    <div class="text-xs text-slate-400">Timezone</div>
+                                    <div class="text-sm text-white font-medium">Karachi (PKT)</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Temperature Gauge Widget -->
+                <div class="lg:col-span-1 scroll-animate">
+                    <div class="glass-card p-8 floating-widget soft-shadow-lg transition-all duration-500">
+                        <div class="text-center">
+                            <div class="flex items-center justify-center mb-4">
+                                <i data-lucide="gauge" class="w-6 h-6 text-purple-400 mr-2"></i>
+                                <h2 class="text-lg font-bold text-white">Temperature Gauge</h2>
+                            </div>
+                            
+                            <div class="relative w-32 h-32 mx-auto mb-4">
+                                <canvas id="temperatureGauge"></canvas>
+                            </div>
+                            
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-slate-400">Range:</span>
+                                    <span class="text-white">0-50°C</span>
+                                </div>
+                                <div class="flex justify-between text-sm">
+                                    <span class="text-slate-400">Alert:</span>
+                                    <span class="text-orange-400">19.0°C</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Temperature Chart -->
+                <div class="lg:col-span-2 scroll-animate">
+                    <div class="glass-card p-6 floating-widget soft-shadow-lg transition-all duration-500">
+                        <div class="flex items-center justify-between mb-6">
+                            <div class="flex items-center">
+                                <i data-lucide="trending-up" class="w-6 h-6 text-indigo-400 mr-2"></i>
+                                <h2 class="text-xl font-bold text-white">Temperature Trend</h2>
+                            </div>
+                            <div class="flex items-center space-x-2 text-sm text-slate-400">
+                                <div class="w-3 h-3 bg-indigo-500 rounded-full animate-pulse"></div>
+                                <span>Last 20 Readings</span>
+                            </div>
+                        </div>
+                        <div class="h-64 relative">
+                            <canvas id="temperatureChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Temperature Logs -->
+            <div class="scroll-animate">
+                <div class="glass-card floating-widget soft-shadow-lg transition-all duration-500">
+                    <div class="p-6 border-b border-white/10">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center">
+                                <i data-lucide="database" class="w-6 h-6 text-cyan-400 mr-2"></i>
+                                <div>
+                                    <h2 class="text-xl font-bold text-white">Recent Temperature Logs</h2>
+                                    <p class="text-sm text-slate-400 mt-1">Latest 10 readings from ESP32 sensor • Karachi timezone</p>
+                                </div>
+                            </div>
+                            <div class="glass-card px-4 py-2 rounded-xl">
+                                <span class="text-sm text-cyan-300 font-medium">Live Data</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="p-6">
+                        <div id="temperatureList" class="space-y-4 max-h-96 overflow-y-auto custom-scrollbar">
+                            <!-- Temperature readings will be populated here -->
+                            <div class="flex justify-center items-center py-12">
+                                <div class="text-center">
+                                    <div class="w-16 h-16 glass-card rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                                        <i data-lucide="wifi" class="w-8 h-8 text-indigo-400"></i>
+                                    </div>
+                                    <p class="text-slate-400 text-lg">Waiting for sensor data...</p>
+                                    <p class="text-slate-500 text-sm mt-2">ESP32 will appear here once connected</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="glass-header border-t border-white/10 mt-16">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <div class="text-center">
+                <div class="flex items-center justify-center mb-4">
+                    <i data-lucide="cpu" class="w-5 h-5 text-indigo-400 mr-2"></i>
+                    <p class="text-white font-medium">ESP32 IoT Temperature Monitoring System</p>
+                </div>
+                <p class="text-slate-400 text-sm">Real-time data from Firebase • Karachi timezone • 19°C alert threshold</p>
+                <div class="flex items-center justify-center mt-4 space-x-6 text-sm text-slate-500">
+                    <span class="flex items-center">
+                        <i data-lucide="shield-check" class="w-4 h-4 mr-1"></i>
+                        Secure Connection
+                    </span>
+                    <span class="flex items-center">
+                        <i data-lucide="zap" class="w-4 h-4 mr-1"></i>
+                        Real-time Updates
+                    </span>
+                    <span class="flex items-center">
+                        <i data-lucide="smartphone" class="w-4 h-4 mr-1"></i>
+                        Mobile Responsive
+                    </span>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // Update last updated timestamp
+        function updateLastUpdatedTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('en-PK', {
+                timeZone: 'Asia/Karachi',
+                hour12: true,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            });
+            document.getElementById('lastUpdated').textContent = timeString;
+        }
+
+        // Update timestamp every 5 seconds
+        setInterval(updateLastUpdatedTime, 5000);
+        
+        // Update immediately when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            updateLastUpdatedTime();
+        });
+    </script>
+</body>
+</html>
+
